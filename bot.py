@@ -17,13 +17,15 @@ Uso:
 import logging
 import os
 import re
+import uuid
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -31,7 +33,13 @@ from telegram.constants import ParseMode, ChatAction
 
 from downloader import download_video, cleanup_file, detect_platform
 from cleaner import remove_metadata, get_file_size_mb, ffmpeg_available
-from generator import generate_description, setup_gemini
+from generator import generate_description, generate_hashtags, setup_gemini
+
+# ──────────────────────────────────────────────
+# Armazenamento temporário para callbacks dos botões
+# chave: desc_id (uuid) → dados do vídeo/descrição
+# ──────────────────────────────────────────────
+_pending: dict[str, dict] = {}
 
 # ──────────────────────────────────────────────
 # Configuração de logs
@@ -121,6 +129,20 @@ def md_escape(text: str) -> str:
     for ch in chars:
         text = text.replace(ch, f"\\{ch}")
     return text
+
+
+def build_keyboard(desc_id: str) -> InlineKeyboardMarkup:
+    """Constrói o teclado inline com os botões de ação."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 Post para Grupos", callback_data=f"group_{desc_id}"),
+            InlineKeyboardButton("📱 Legenda Stories", callback_data=f"story_{desc_id}"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Nova variação",   callback_data=f"regen_{desc_id}"),
+            InlineKeyboardButton("#️⃣ Hashtags",        callback_data=f"tags_{desc_id}"),
+        ],
+    ])
 
 # ──────────────────────────────────────────────
 # Handlers de comandos
@@ -275,20 +297,29 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Erro ao enviar documento: {e2}")
             await update.message.reply_text(f"❌ Não foi possível enviar o arquivo:\n{e}")
 
-    # ── Etapa 7: Envia descrições
+    # ── Etapa 7: Envia descrições com botões inline
     if send_ok:
-        ai_label = "🤖 Gerado com IA" if desc.get("used_ai") else "📝 Template padrão"
+        ai_label = "🤖 IA" if desc.get("used_ai") else "📝 Template"
 
-        desc_text = (
-            f"📋 DESCRIÇÕES PRONTAS — {ai_label}\n"
-            f"{'─' * 34}\n\n"
-            f"👥 Post para Grupos (WhatsApp/Telegram):\n\n"
-            f"{desc['group_post']}\n\n"
-            f"{'─' * 34}\n\n"
-            f"📱 Legenda para Instagram Story:\n\n"
-            f"{desc['story_caption']}"
+        # Salva dados para os callbacks dos botões
+        desc_id = str(uuid.uuid4())[:8]
+        _pending[desc_id] = {
+            "group_post":   desc["group_post"],
+            "story_caption": desc["story_caption"],
+            "title":        video_title,
+            "platform":     platform,
+            "description":  original_desc,
+        }
+
+        caption_text = (
+            f"✅ *Descrições prontas* — {ai_label}\n\n"
+            f"Escolha o que deseja:"
         )
-        await update.message.reply_text(desc_text)
+        await update.message.reply_text(
+            caption_text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=build_keyboard(desc_id),
+        )
 
     # ── Etapa 8: Limpeza
     await status_msg.delete()
@@ -297,6 +328,81 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cleanup_file(final_path)
 
     logger.info(f"[{user.id}] Concluído com sucesso!")
+
+
+# ──────────────────────────────────────────────
+# Handler dos botões inline
+# ──────────────────────────────────────────────
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()  # remove o "carregando" do botão
+
+    data = query.data or ""
+
+    if data.startswith("group_"):
+        desc_id = data[6:]
+        entry = _pending.get(desc_id)
+        if not entry:
+            await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
+            return
+        await query.answer("📋 Post enviado!", show_alert=False)
+        await query.message.reply_text(
+            f"📋 *Post para Grupos:*\n\n{entry['group_post']}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    elif data.startswith("story_"):
+        desc_id = data[6:]
+        entry = _pending.get(desc_id)
+        if not entry:
+            await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
+            return
+        await query.answer("📱 Legenda enviada!", show_alert=False)
+        await query.message.reply_text(
+            f"📱 *Legenda Stories:*\n\n{entry['story_caption']}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    elif data.startswith("regen_"):
+        desc_id = data[6:]
+        entry = _pending.get(desc_id)
+        if not entry:
+            await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
+            return
+        msg = await query.message.reply_text("🔄 Gerando nova variação com IA...")
+        new_desc = await generate_description(
+            title=entry["title"],
+            platform=entry["platform"],
+            original_description=entry["description"],
+        )
+        # Atualiza os dados salvos com a nova variação
+        entry["group_post"] = new_desc["group_post"]
+        entry["story_caption"] = new_desc["story_caption"]
+        _pending[desc_id] = entry
+
+        ai_label = "🤖 IA" if new_desc.get("used_ai") else "📝 Template"
+        await msg.edit_text(
+            f"✅ *Nova variação gerada* — {ai_label}\n\nEscolha o que deseja:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=build_keyboard(desc_id),
+        )
+
+    elif data.startswith("tags_"):
+        desc_id = data[5:]
+        entry = _pending.get(desc_id)
+        if not entry:
+            await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
+            return
+        msg = await query.message.reply_text("#️⃣ Gerando hashtags com IA...")
+        hashtags = await generate_hashtags(
+            title=entry["title"],
+            platform=entry["platform"],
+            original_description=entry["description"],
+        )
+        await msg.edit_text(
+            f"#️⃣ *Hashtags para {entry['platform']}:*\n\n{hashtags}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
 
 # ──────────────────────────────────────────────
@@ -355,6 +461,9 @@ def main():
         filters.TEXT & ~filters.COMMAND,
         handle_unknown,
     ))
+
+    # Handler dos botões inline
+    app.add_handler(CallbackQueryHandler(button_callback))
 
     app.add_error_handler(error_handler)
 

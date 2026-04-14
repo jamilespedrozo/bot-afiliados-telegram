@@ -185,3 +185,56 @@ def _generate_template(title: str, platform: str, duration: int) -> dict:
         "group_post": group_post,
         "story_caption": story_caption,
     }
+
+
+async def generate_hashtags(
+    title: str,
+    platform: str,
+    original_description: str = "",
+) -> str:
+    """
+    Gera um bloco de hashtags relevantes para afiliados.
+    Retorna uma string com ~20 hashtags prontas para copiar.
+    """
+    if GEMINI_AVAILABLE and _gemini_client:
+        try:
+            prompt = f"""Você é especialista em marketing de afiliados no Brasil.
+
+Vídeo da plataforma {platform}, título: "{title}"
+{"Descrição: " + original_description[:200] if original_description else ""}
+
+Gere exatamente 20 hashtags relevantes em português para uso em posts de afiliados.
+Misture hashtags: populares (amplo alcance) + nichadas (engajamento) + de ação.
+
+Responda APENAS as hashtags em uma linha, separadas por espaço, começando com #.
+Exemplo: #afiliados #marketingdigital #rendaextra ...
+
+Nada mais além das hashtags."""
+
+            def _call():
+                response = _gemini_client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        temperature=0.7,
+                        max_output_tokens=200,
+                    ),
+                )
+                return response.text.strip()
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, _call)
+            if result.startswith("#"):
+                return result
+        except Exception as e:
+            logger.warning(f"Gemini hashtags falhou: {e}")
+
+    # Fallback: hashtags padrão para afiliados
+    platform_tag = f"#{platform.lower().replace(' ', '')}"
+    return (
+        f"#afiliados #marketingdigital #rendaextra #trabalhoonline "
+        f"#empreendedorismo #ganhedinheiro #negociodigital {platform_tag} "
+        f"#conteudodigital #marketingdeafiliados #vendasonline #lucro "
+        f"#liberdadefinanceira #dinheiro #sucesso #motivacao "
+        f"#dicasdemarketing #tudodigital #brasilempreendedor #riqueza"
+    )
