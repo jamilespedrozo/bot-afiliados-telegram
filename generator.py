@@ -94,27 +94,33 @@ async def _generate_with_gemini(
         else ""
     )
 
-    prompt = f"""Você é um especialista em marketing de afiliados no Brasil.
+    prompt = f"""Você é um copywriter expert em vendas de afiliados no Brasil.
 
-Recebi um vídeo da plataforma {platform} com o título: "{title}"{desc_context}
+Preciso de textos persuasivos para vender um produto/serviço ao cliente final.
+O vídeo que tenho é da plataforma {platform}, título: "{title}"{desc_context}
 Duração: {duration_text}
 
-Crie DOIS textos em português do Brasil, diretos, persuasivos e com emojis:
+IMPORTANTE: os textos devem falar DIRETAMENTE COM O CLIENTE FINAL (comprador),
+NÃO com outros afiliados. Use linguagem de vendas, gatilhos mentais e benefícios.
 
 ---
-TEXTO 1 - POST PARA GRUPOS DE AFILIADOS (WhatsApp/Telegram)
-Formato: curto, impactante, máximo 5 linhas
-- Inclua uma chamada para ação clara
-- Use emojis estratégicos
-- Tom urgente e direto
-- Inclua hashtags relevantes no final
+TEXTO 1 - POST PARA GRUPOS (WhatsApp/Telegram) — fala COM o cliente
+Regras:
+- Abra com uma dor, desejo ou situação que o cliente vive
+- Mostre o benefício principal do produto/serviço
+- Use gatilhos: escassez, prova social, curiosidade ou urgência
+- Termine com uma chamada para ação clara (ex: "Clica no link", "Comenta SIM", "Manda mensagem agora")
+- Máximo 6 linhas, com emojis estratégicos
+- NÃO mencione afiliado, comissão ou "compartilhe"
 
-TEXTO 2 - LEGENDA PARA INSTAGRAM STORY
-Formato: bem curto (máximo 2-3 linhas), vibrante, moderno
-- Ideal para aparecer sobre um vídeo/imagem
-- Máximo 150 caracteres
-- Use 2-3 emojis no máximo
-- Call to action em 1 linha
+TEXTO 2 - LEGENDA PARA INSTAGRAM STORY — fala COM o cliente
+Regras:
+- Máximo 2 linhas, impacto imediato
+- Fale de uma transformação ou resultado que o cliente quer
+- Termine com CTA curto ("Link na bio", "Arrasta pra cima", "Me chama no direct")
+- Máximo 120 caracteres
+- 2 emojis no máximo
+- NÃO mencione afiliado ou repassar
 
 Responda EXATAMENTE neste formato JSON (sem markdown):
 {{
@@ -169,16 +175,16 @@ def _generate_template(title: str, platform: str, duration: int) -> dict:
     emoji = platform_emoji.get(platform, "🎬")
 
     group_post = (
-        f"{emoji} *{clean_title}*\n\n"
-        f"🔥 Conteúdo quente que está bombando no {platform}!\n"
-        f"💰 Compartilhe e monetize agora\n"
-        f"👇 Veja e repasse para seus grupos\n\n"
-        f"#afiliados #marketingdigital #{platform.lower()} #conteudodigital #renda"
+        f"{emoji} Você já tentou resolver isso e não conseguiu?\n\n"
+        f"👉 {clean_title}\n"
+        f"✅ Isso está mudando a vida de muita gente — e pode mudar a sua também\n"
+        f"⏳ As vagas/condições são limitadas, não deixa pra depois\n\n"
+        f"👇 Clica no link e descobre como"
     )
 
     story_caption = (
-        f"{emoji} Isso tá viral no {platform}!\n"
-        f"🚀 Corre ver e compartilha!"
+        f"{emoji} Isso pode mudar tudo pra você!\n"
+        f"🔗 Link na bio — corre antes que esgote!"
     )
 
     return {
