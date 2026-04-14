@@ -135,12 +135,11 @@ def build_keyboard(desc_id: str) -> InlineKeyboardMarkup:
     """Constrói o teclado inline com os botões de ação."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📋 Post para Grupos", callback_data=f"group_{desc_id}"),
-            InlineKeyboardButton("📱 Legenda Stories", callback_data=f"story_{desc_id}"),
+            InlineKeyboardButton("📝 Descrição",     callback_data=f"group_{desc_id}"),
+            InlineKeyboardButton("#️⃣ Hashtags",     callback_data=f"story_{desc_id}"),
         ],
         [
-            InlineKeyboardButton("🔄 Nova variação",   callback_data=f"regen_{desc_id}"),
-            InlineKeyboardButton("#️⃣ Hashtags",        callback_data=f"tags_{desc_id}"),
+            InlineKeyboardButton("🔄 Nova variação", callback_data=f"regen_{desc_id}"),
         ],
     ])
 
@@ -345,9 +344,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not entry:
             await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
             return
-        await query.answer("📋 Post enviado!", show_alert=False)
+        await query.answer("📝 Descrição enviada!", show_alert=False)
         await query.message.reply_text(
-            f"📋 *Post para Grupos:*\n\n{entry['group_post']}",
+            f"📝 *Descrição do produto:*\n\n{entry['group_post']}",
             parse_mode=ParseMode.MARKDOWN,
         )
 
@@ -357,9 +356,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not entry:
             await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
             return
-        await query.answer("📱 Legenda enviada!", show_alert=False)
+        await query.answer("#️⃣ Hashtags enviadas!", show_alert=False)
         await query.message.reply_text(
-            f"📱 *Legenda Stories:*\n\n{entry['story_caption']}",
+            f"#️⃣ *Hashtags:*\n\n{entry['story_caption']}",
             parse_mode=ParseMode.MARKDOWN,
         )
 

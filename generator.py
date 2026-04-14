@@ -94,38 +94,30 @@ async def _generate_with_gemini(
         else ""
     )
 
-    prompt = f"""Você é um copywriter expert em vendas de afiliados no Brasil.
+    prompt = f"""Você é um especialista em conteúdo digital para afiliados no Brasil.
 
-Preciso de textos persuasivos para vender um produto/serviço ao cliente final.
-O vídeo que tenho é da plataforma {platform}, título: "{title}"{desc_context}
+Recebi um vídeo da plataforma {platform}.
+Título: "{title}"{desc_context}
 Duração: {duration_text}
 
-IMPORTANTE: os textos devem falar DIRETAMENTE COM O CLIENTE FINAL (comprador),
-NÃO com outros afiliados. Use linguagem de vendas, gatilhos mentais e benefícios.
+Gere uma DESCRIÇÃO SIMPLES E DIRETA do produto ou serviço mostrado no vídeo.
 
----
-TEXTO 1 - POST PARA GRUPOS (WhatsApp/Telegram) — fala COM o cliente
-Regras:
-- Abra com uma dor, desejo ou situação que o cliente vive
-- Mostre o benefício principal do produto/serviço
-- Use gatilhos: escassez, prova social, curiosidade ou urgência
-- Termine com uma chamada para ação clara (ex: "Clica no link", "Comenta SIM", "Manda mensagem agora")
-- Máximo 6 linhas, com emojis estratégicos
-- NÃO mencione afiliado, comissão ou "compartilhe"
+Regras para a descrição:
+- Explique O QUE É o produto/serviço em 2 a 4 linhas
+- Diga quais são os principais benefícios ou resultados
+- Linguagem natural, sem fórmulas de vendas, sem urgência, sem “clica no link”
+- Use emojis de forma discreta (máx 3)
+- Sem hashtags na descrição
 
-TEXTO 2 - LEGENDA PARA INSTAGRAM STORY — fala COM o cliente
-Regras:
-- Máximo 2 linhas, impacto imediato
-- Fale de uma transformação ou resultado que o cliente quer
-- Termine com CTA curto ("Link na bio", "Arrasta pra cima", "Me chama no direct")
-- Máximo 120 caracteres
-- 2 emojis no máximo
-- NÃO mencione afiliado ou repassar
+Regras para as hashtags:
+- Gere exatamente 15 hashtags relevantes ao nicho do produto
+- Misture populares e nichadas
+- Apenas as hashtags, sem texto extra
 
 Responda EXATAMENTE neste formato JSON (sem markdown):
 {{
-  "group_post": "texto aqui",
-  "story_caption": "texto aqui"
+  "group_post": "descrição do produto aqui",
+  "story_caption": "#hashtag1 #hashtag2 #hashtag3 ..."
 }}"""
 
     def _call_gemini():
@@ -175,16 +167,18 @@ def _generate_template(title: str, platform: str, duration: int) -> dict:
     emoji = platform_emoji.get(platform, "🎬")
 
     group_post = (
-        f"{emoji} Você já tentou resolver isso e não conseguiu?\n\n"
-        f"👉 {clean_title}\n"
-        f"✅ Isso está mudando a vida de muita gente — e pode mudar a sua também\n"
-        f"⏳ As vagas/condições são limitadas, não deixa pra depois\n\n"
-        f"👇 Clica no link e descobre como"
+        f"{emoji} {clean_title}\n\n"
+        f"✅ Conteúdo de {platform} com dicas e informações úteis\n"
+        f"📍 Assista e descubra mais sobre esse assunto"
     )
 
+    # Hashtags padrão por plataforma
+    platform_tag = f"#{platform.lower().replace(' ', '')}"
     story_caption = (
-        f"{emoji} Isso pode mudar tudo pra você!\n"
-        f"🔗 Link na bio — corre antes que esgote!"
+        f"#conteúdo #dicas #viral {platform_tag} "
+        f"#digital #aprenda #trending #brasil "
+        f"#descoberta #novidade #informação #top "
+        f"#recomendo #assista #valeudemais"
     )
 
     return {
