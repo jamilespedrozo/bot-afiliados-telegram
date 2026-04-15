@@ -163,8 +163,25 @@ async def verificar_freemium(user_id: int) -> dict:
                 'plano': 'Admin', 'usos_hoje': 0, 'limite_diario': 0}
 
     loop = asyncio.get_event_loop()
-    plano = await loop.run_in_executor(None, db.get_plano_usuario, user_id)
-    usos_hoje = await loop.run_in_executor(None, db.consultar_usos_hoje, user_id)
+
+    try:
+        plano = await loop.run_in_executor(None, db.get_plano_usuario, user_id)
+    except Exception as e:
+        logger.error(f"[freemium] Erro ao buscar plano de {user_id}: {e}")
+        # Em caso de erro de banco, libera (fail-open para não afetar pagantes)
+        plano = None
+
+    try:
+        usos_hoje = await loop.run_in_executor(None, db.consultar_usos_hoje, user_id)
+    except Exception as e:
+        logger.error(f"[freemium] Erro ao consultar usos de {user_id}: {e}")
+        # Forcçar recriação das tabelas e tentar de novo
+        try:
+            await loop.run_in_executor(None, db.criar_tabelas)
+            usos_hoje = await loop.run_in_executor(None, db.consultar_usos_hoje, user_id)
+        except Exception as e2:
+            logger.error(f"[freemium] Falha crítica ao criar tabelas: {e2}")
+            usos_hoje = 0
 
     is_pago = plano is not None
     limite = _get_limite_diario(plano)
@@ -501,7 +518,18 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if send_ok:
         # ── Registrar uso após sucesso ──
         loop = asyncio.get_event_loop()
-        usos = await loop.run_in_executor(None, db.registrar_uso, user.id)
+        try:
+            usos = await loop.run_in_executor(None, db.registrar_uso, user.id)
+            logger.info(f"[{user.id}] Uso registrado: {usos}/{info['limite_diario'] or 'ilimitado'}")
+        except Exception as e:
+            logger.error(f"[{user.id}] Falha ao registrar uso: {e}")
+            # Tenta recriar tabelas e registrar novamente
+            try:
+                await loop.run_in_executor(None, db.criar_tabelas)
+                usos = await loop.run_in_executor(None, db.registrar_uso, user.id)
+            except Exception as e2:
+                logger.error(f"[{user.id}] Falha crítica ao registrar uso: {e2}")
+                usos = info['usos_hoje'] + 1  # fallback estimado
 
         ai_label = "🤖 IA" if desc.get("used_ai") else "📝 Template"
 
