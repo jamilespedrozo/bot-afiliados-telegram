@@ -62,13 +62,21 @@ def get_ydl_opts(output_path: str, platform: str) -> dict:
     }
 
     if platform == "TikTok":
-        # Para TikTok: força download sem marca d'água via API interna
-        base_opts.update(
-            {
-                "format": "download_addr-0/download_addr/play_addr/play_addr_h264/best",
-                "extractor_args": {"tiktok": {"webpage_download": ["1"]}},
-            }
-        )
+    base_opts.update(
+        {
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "extractor_args": {
+                "tiktok": {
+                    "api_hostname": ["api22-normal-c-useast2a.tiktokv.com"],
+                    "app_version": ["35.1.3"],
+                }
+            },
+            "http_headers": {
+                "User-Agent": "TikTok/35.1.3 (iPhone; iOS 17.0; Scale/3.00)",
+                "Accept": "application/json",
+            },
+        }
+    )
 
     elif platform == "Instagram":
         base_opts.update(
