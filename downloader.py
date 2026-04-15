@@ -4,7 +4,6 @@ Suporta: TikTok, Instagram, Pinterest, YouTube, MP4 direto
 """
 
 import os
-import re
 import asyncio
 import uuid
 import logging
@@ -22,7 +21,7 @@ DOWNLOADS_DIR.mkdir(exist_ok=True)
 def detect_platform(url: str) -> str:
     """Detecta a plataforma a partir da URL."""
     url_lower = url.lower()
-    if "tiktok.com" in url_lower or "vm.tiktok" in url_lower:
+    if "tiktok.com" in url_lower or "vt.tiktok" in url_lower or "vm.tiktok" in url_lower:
         return "TikTok"
     elif "instagram.com" in url_lower or "instagr.am" in url_lower:
         return "Instagram"
@@ -62,17 +61,18 @@ def get_ydl_opts(output_path: str, platform: str) -> dict:
     if platform == "TikTok":
         base_opts.update(
             {
-                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "extractor_args": {
-                    "tiktok": {
-                        "api_hostname": ["api22-normal-c-useast2a.tiktokv.com"],
-                        "app_version": ["35.1.3"],
-                    }
-                },
+                "format": "best/bestvideo+bestaudio",
                 "http_headers": {
-                    "User-Agent": "TikTok/35.1.3 (iPhone; iOS 17.0; Scale/3.00)",
-                    "Accept": "application/json",
+                    "User-Agent": (
+                        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                        "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                        "Version/17.0 Mobile/15E148 Safari/604.1"
+                    ),
+                    "Referer": "https://www.tiktok.com/",
+                    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
                 },
+                "nocheckcertificate": True,
+                "geo_bypass": True,
             }
         )
 
@@ -83,7 +83,7 @@ def get_ydl_opts(output_path: str, platform: str) -> dict:
             }
         )
 
-    elif platform in ("YouTube",):
+    elif platform == "YouTube":
         base_opts.update(
             {
                 "format": (
@@ -99,19 +99,11 @@ def get_ydl_opts(output_path: str, platform: str) -> dict:
 async def download_video(url: str) -> dict:
     """
     Faz o download do vídeo a partir de qualquer URL suportada.
-
-    Retorna um dicionário com:
-      - success (bool)
-      - file_path (str) — caminho do arquivo baixado
-      - title (str) — título do vídeo
-      - platform (str) — plataforma detectada
-      - duration (int) — duração em segundos
-      - error (str) — mensagem de erro (se houver)
+    Tenta múltiplas estratégias em caso de falha no TikTok.
     """
     platform = detect_platform(url)
     unique_id = uuid.uuid4().hex[:8]
     output_template = str(DOWNLOADS_DIR / f"video_{unique_id}.%(ext)s")
-    final_path = str(DOWNLOADS_DIR / f"video_{unique_id}.mp4")
 
     result = {
         "success": False,
@@ -123,37 +115,71 @@ async def download_video(url: str) -> dict:
         "error": None,
     }
 
-    def _run_download():
-        ydl_opts = get_ydl_opts(output_template, platform)
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    def _run_download(opts):
+        with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             return info
 
-    try:
-        loop = asyncio.get_event_loop()
-        info = await loop.run_in_executor(None, _run_download)
+    # Estratégias de fallback para TikTok
+    strategies = [get_ydl_opts(output_template, platform)]
 
-        if info:
-            result["title"] = info.get("title", "Vídeo sem título")
-            result["duration"] = info.get("duration", 0)
-            result["description"] = info.get("description", "")
+    if platform == "TikTok":
+        fallback1 = {
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "format": "best",
+            "nocheckcertificate": True,
+            "geo_bypass": True,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+            },
+        }
+        fallback2 = {
+            "outtmpl": output_template,
+            "quiet": True,
+            "no_warnings": True,
+            "format": "best",
+        }
+        strategies.extend([fallback1, fallback2])
 
-        downloaded = _find_downloaded_file(unique_id)
-        if downloaded:
-            result["file_path"] = downloaded
-            result["success"] = True
-        else:
-            result["error"] = "Arquivo não encontrado após download."
+    loop = asyncio.get_event_loop()
+    last_error = None
 
-    except yt_dlp.utils.DownloadError as e:
-        err_msg = str(e)
-        logger.error(f"Erro de download [{platform}]: {err_msg}")
-        result["error"] = _friendly_error(err_msg, platform)
+    for i, opts in enumerate(strategies):
+        try:
+            logger.info(f"[{platform}] Tentativa {i+1}/{len(strategies)}: {url}")
+            info = await loop.run_in_executor(None, _run_download, opts)
 
-    except Exception as e:
-        logger.exception(f"Erro inesperado no download: {e}")
-        result["error"] = f"Erro inesperado: {str(e)}"
+            if info:
+                result["title"] = info.get("title", "Vídeo sem título")
+                result["duration"] = info.get("duration", 0)
+                result["description"] = info.get("description", "")
 
+            downloaded = _find_downloaded_file(unique_id)
+            if downloaded:
+                result["file_path"] = downloaded
+                result["success"] = True
+                logger.info(f"[{platform}] Download OK na tentativa {i+1}: {downloaded}")
+                return result
+            else:
+                last_error = "Arquivo não encontrado após download."
+
+        except yt_dlp.utils.DownloadError as e:
+            last_error = str(e)
+            logger.warning(f"[{platform}] Tentativa {i+1} falhou: {last_error[:100]}")
+            continue
+
+        except Exception as e:
+            last_error = str(e)
+            logger.exception(f"[{platform}] Erro inesperado na tentativa {i+1}: {e}")
+            continue
+
+    result["error"] = _friendly_error(last_error or "Erro desconhecido", platform)
     return result
 
 
@@ -182,15 +208,20 @@ def _friendly_error(error_msg: str, platform: str) -> str:
         return f"❌ Vídeo não encontrado. Verifique se o link está correto."
     elif "unsupported" in msg:
         return (
-            f"❌ Este tipo de link do {platform} não é suportado ainda. "
-            f"Tente outro formato de URL."
+            f"❌ Não foi possível baixar este vídeo do {platform}.\n"
+            f"Tente copiar o link diretamente do app (botão Compartilhar → Copiar link)."
         )
     elif "geo" in msg or "blocked" in msg or "available" in msg:
         return f"❌ Este vídeo está bloqueado por região ou indisponível."
     elif "copyright" in msg:
         return f"❌ Vídeo bloqueado por direitos autorais."
     else:
-        return f"❌ Não foi possível baixar o vídeo. Tente novamente ou use outro link.\nDetalhe: {error_msg[:200]}"
+        return (
+            f"❌ Não foi possível baixar o vídeo após 3 tentativas.\n"
+            f"Tente copiar o link diretamente do app TikTok:\n"
+            f"Compartilhar → Copiar link\n\n"
+            f"Detalhe: {error_msg[:150]}"
+        )
 
 
 def cleanup_file(file_path: str):
