@@ -141,9 +141,13 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"📊 *Estatísticas do Bot*\n\n"
+        f"*Usuários Pagos:*\n"
         f"✅ Ativos:          `{stats.get('ativos', 0)}`\n"
         f"♾️ Vitalícios:     `{stats.get('vitalicios', 0)}`\n"
         f"📅 Com plano ativo: `{stats.get('com_plano_ativo', 0)}`\n"
-        f"❌ Inativos:        `{stats.get('inativos', 0)}`\n",
+        f"❌ Inativos:        `{stats.get('inativos', 0)}`\n\n"
+        f"*Uso Hoje:*\n"
+        f"👥 Usuários ativos hoje: `{stats.get('usuarios_gratis_hoje', 0)}`\n"
+        f"🎬 Total de vídeos hoje: `{stats.get('total_usos_hoje', 0)}`\n",
         parse_mode=ParseMode.MARKDOWN,
     )

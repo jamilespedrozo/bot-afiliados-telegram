@@ -44,10 +44,23 @@ load_dotenv()
 # ──────────────────────────────────────────────
 # Configuração
 # ──────────────────────────────────────────────
-BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-ADMIN_ID       = int(os.getenv("ADMIN_ID", "0"))
+BOT_TOKEN        = os.getenv("TELEGRAM_BOT_TOKEN", "")
+GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")
+ADMIN_ID         = int(os.getenv("ADMIN_ID", "0"))
 MAX_FILE_SIZE_MB = 50
+
+# Freemium
+FREE_USAGE_LIMIT = int(os.getenv("FREE_USAGE_LIMIT", "3"))
+LINK_COMPRA      = os.getenv("LINK_COMPRA", "https://charm-craft-sell.lovable.app")
+
+# Limites diários por plano (0 = ilimitado)
+LIMITES_PLANO = {
+    "starter": 15, "iniciante": 15, "afiliado iniciante": 15,
+    "pro": 0, "afiliado pro": 0,
+    "black": 0, "premium": 0, "escala": 0, "escala de vendas": 0,
+    "trimestral": 0, "anual": 0,
+    "vitalício": 0, "vitalicio": 0, "lifetime": 0,
+}
 
 URL_PATTERN = re.compile(
     r"https?://[^\s]+"
@@ -95,24 +108,9 @@ MSG_WELCOME = (
     "*Comandos:* /ajuda /status /meuacesso"
 )
 
-MSG_SEM_ACESSO = (
-    "⛔ *Acesso não autorizado*\n\n"
-    "Para usar o bot, adquira um plano e informe seu ID do Telegram no checkout\\.\n\n"
-    "🆔 *Seu ID:* `{user_id}`\n\n"
-    "_Copie esse número e cole no campo \"ID do Telegram\" durante a compra\\._"
-)
-
 # ──────────────────────────────────────────────
-# Autorização via banco de dados
+# Helpers
 # ──────────────────────────────────────────────
-async def is_authorized(user_id: int) -> bool:
-    """Admin sempre tem acesso. Demais verificam no banco de dados."""
-    if user_id == ADMIN_ID:
-        return True
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, db.verificar_acesso, user_id)
-
-
 def md_escape(text: str) -> str:
     """Escapa caracteres especiais para MarkdownV2."""
     chars = r"_*[]()~`>#+-=|{}.!"
@@ -132,6 +130,58 @@ def build_keyboard(desc_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🔄 Nova variação", callback_data=f"regen_{desc_id}"),
         ],
     ])
+
+
+def _get_limite_diario(plano: str | None) -> int:
+    """Retorna o limite diário de vídeos baseado no plano. 0 = ilimitado."""
+    if not plano:
+        return FREE_USAGE_LIMIT
+    plano_lower = plano.lower().strip()
+    for chave, limite in LIMITES_PLANO.items():
+        if chave in plano_lower:
+            return limite
+    return 0  # plano pago desconhecido → ilimitado
+
+
+# ──────────────────────────────────────────────
+# Verificação freemium
+# ──────────────────────────────────────────────
+async def verificar_freemium(user_id: int) -> dict:
+    """
+    Retorna o status do usuário no modelo freemium.
+    {
+        'pode_usar': bool,
+        'is_admin': bool,
+        'is_pago': bool,
+        'plano': str | None,
+        'usos_hoje': int,
+        'limite_diario': int,  # 0 = ilimitado
+    }
+    """
+    if user_id == ADMIN_ID:
+        return {'pode_usar': True, 'is_admin': True, 'is_pago': True,
+                'plano': 'Admin', 'usos_hoje': 0, 'limite_diario': 0}
+
+    loop = asyncio.get_event_loop()
+    plano = await loop.run_in_executor(None, db.get_plano_usuario, user_id)
+    usos_hoje = await loop.run_in_executor(None, db.consultar_usos_hoje, user_id)
+
+    is_pago = plano is not None
+    limite = _get_limite_diario(plano)
+
+    if limite == 0:  # ilimitado
+        pode_usar = True
+    else:
+        pode_usar = usos_hoje < limite
+
+    return {
+        'pode_usar': pode_usar,
+        'is_admin': False,
+        'is_pago': is_pago,
+        'plano': plano,
+        'usos_hoje': usos_hoje,
+        'limite_diario': limite,
+    }
 
 # ──────────────────────────────────────────────
 # Callback de boas-vindas (chamado pelo webhook)
@@ -194,34 +244,40 @@ async def verificar_expirados():
 # Handlers de comandos
 # ──────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user       = update.effective_user
-    authorized = await is_authorized(user.id)
+    user  = update.effective_user
+    info  = await verificar_freemium(user.id)
 
     id_block = (
         f"🆔 *Seu ID do Telegram:* `{user.id}`\n"
         f"_Guarde este número para usar no checkout ao comprar o plano\\._\n\n"
     )
 
-    if not authorized:
-        await update.message.reply_text(
-            id_block + MSG_SEM_ACESSO.format(user_id=user.id),
-            parse_mode=ParseMode.MARKDOWN_V2,
+    if info['is_pago']:
+        plano_str = md_escape(info['plano'] or '')
+        limite_str = "♾️ Ilimitado" if info['limite_diario'] == 0 else f"{info['limite_diario']} vídeos/dia"
+        extra = f"\n📦 *Plano:* {plano_str} \\| {limite_str}"
+    else:
+        restantes = max(0, FREE_USAGE_LIMIT - info['usos_hoje'])
+        extra = (
+            f"\n🆓 *Plano Grátis:* {restantes}/{FREE_USAGE_LIMIT} vídeos restantes hoje\n"
+            f"_Faça upgrade para processar mais vídeos\\!_"
         )
-        return
 
     await update.message.reply_text(
-        id_block + MSG_WELCOME,
+        id_block + MSG_WELCOME + extra,
         parse_mode=ParseMode.MARKDOWN_V2,
     )
 
 
 async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update.effective_user.id):
-        return
     msg = (
         "💡 *Dicas de Uso*\n\n"
         "*Plataformas suportadas:*\n"
         "• TikTok, Instagram Reels, YouTube, Pinterest, MP4\n\n"
+        "🆓 *Plano Grátis:* 3 vídeos/dia\n"
+        "🟢 *Starter:* 15 vídeos/dia — R$37/mês\n"
+        "🟡 *Pro:* Ilimitado — R$67/mês\n"
+        "🔵 *Black:* Ilimitado + prioridade — R$97/mês\n\n"
         "⚠️ *Avisos:*\n"
         "• Vídeos privados não funcionam\n"
         "• Limite de 50MB por vídeo\n"
@@ -232,47 +288,57 @@ async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_meuacesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    info = await verificar_freemium(user.id)
 
-    if user.id == ADMIN_ID:
+    if info['is_admin']:
         await update.message.reply_text(
             "👑 Você é o *administrador* — acesso ilimitado\\.\\!",
             parse_mode=ParseMode.MARKDOWN_V2,
         )
         return
 
-    loop  = asyncio.get_event_loop()
-    dados = await loop.run_in_executor(None, db.buscar_usuario, user.id)
+    if info['is_pago']:
+        loop  = asyncio.get_event_loop()
+        dados = await loop.run_in_executor(None, db.buscar_usuario, user.id)
+        expiry = dados.get("data_expiracao") if dados else None
 
-    if not dados or not dados.get("ativo"):
+        if expiry is None:
+            exp_str = "♾️ Vitalício"
+        else:
+            now       = datetime.now(timezone.utc)
+            dias_rest = (expiry - now).days
+            data_fmt  = expiry.strftime("%d/%m/%Y")
+            exp_str   = f"📅 {data_fmt} \\({dias_rest} dias restantes\\)"
+
+        limite_str = "♾️ Ilimitado" if info['limite_diario'] == 0 else f"{info['limite_diario']} vídeos/dia"
+        usos_str   = str(info['usos_hoje'])
+
         await update.message.reply_text(
-            f"❌ Nenhum plano ativo encontrado\\.\n\n"
-            f"🆔 Seu ID: `{user.id}`\n"
-            f"Compre um plano e informe este ID no checkout\\.",
+            f"✅ *Seu Plano*\n\n"
+            f"👤 Nome: {md_escape(dados.get('nome', '') if dados else '')}\n"
+            f"📦 Plano: {md_escape(info['plano'] or '')}\n"
+            f"📊 Limite diário: {limite_str}\n"
+            f"🎬 Usos hoje: {usos_str}\n"
+            f"⏰ Validade: {exp_str}\n",
             parse_mode=ParseMode.MARKDOWN_V2,
         )
-        return
-
-    expiry = dados.get("data_expiracao")
-    if expiry is None:
-        exp_str = "♾️ Vitalício"
     else:
-        now          = datetime.now(timezone.utc)
-        dias_rest    = (expiry - now).days
-        data_fmt     = expiry.strftime("%d/%m/%Y")
-        exp_str      = f"📅 {data_fmt} \\({dias_rest} dias restantes\\)"
-
-    await update.message.reply_text(
-        f"✅ *Seu Plano*\n\n"
-        f"👤 Nome: {md_escape(dados.get('nome', ''))}\n"
-        f"📦 Plano: {md_escape(dados.get('plano', ''))}\n"
-        f"⏰ Validade: {exp_str}\n",
-        parse_mode=ParseMode.MARKDOWN_V2,
-    )
+        restantes = max(0, FREE_USAGE_LIMIT - info['usos_hoje'])
+        await update.message.reply_text(
+            f"🆓 *Plano Grátis*\n\n"
+            f"🆔 Seu ID: `{user.id}`\n"
+            f"🎬 Vídeos hoje: {info['usos_hoje']}/{FREE_USAGE_LIMIT}\n"
+            f"📊 Restantes: {restantes}\n\n"
+            f"_O limite reseta todo dia à meia\\-noite\\._\n\n"
+            f"⬆️ *Faça upgrade* para processar mais vídeos\\!",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Ver Planos", url=LINK_COMPRA)]
+            ]),
+        )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update.effective_user.id):
-        return
 
     ffmpeg_ok = ffmpeg_available()
     gemini_ok = bool(GEMINI_API_KEY and GEMINI_API_KEY != "SUA_CHAVE_GEMINI_AQUI")
@@ -302,13 +368,45 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not await is_authorized(user.id):
-        await update.message.reply_text(
-            MSG_SEM_ACESSO.format(user_id=user.id),
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
+
+    # ── Verificação freemium antes de processar ──
+    info = await verificar_freemium(user.id)
+
+    if not info['pode_usar']:
+        limite = info['limite_diario']
+        usos   = info['usos_hoje']
+
+        if info['is_pago']:
+            # Plano Starter atingiu o limite diário
+            await update.message.reply_text(
+                f"⚠️ *Limite diário atingido*\n\n"
+                f"📊 Você usou *{usos}/{limite}* vídeos do seu plano hoje\\.\n"
+                f"O limite reseta à meia\\-noite\\.\n\n"
+                f"⬆️ Faça upgrade para *ilimitado*\\!",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Fazer Upgrade", url=LINK_COMPRA)]
+                ]),
+            )
+        else:
+            # Usuário grátis atingiu o limite
+            await update.message.reply_text(
+                f"⛔ *Limite grátis atingido\\!*\n\n"
+                f"Você já usou seus *{FREE_USAGE_LIMIT} vídeos grátis* de hoje\\.\n"
+                f"O limite reseta todo dia à meia\\-noite\\.\n\n"
+                f"🆔 Seu ID: `{user.id}`\n"
+                f"_Informe este ID no checkout ao comprar\\._\n\n"
+                f"🟢 *Starter* — 15 vídeos/dia — R\\$37/mês\n"
+                f"🟡 *Pro* — Ilimitado — R\\$67/mês\n"
+                f"🔵 *Black* — Ilimitado \\+ extras — R\\$97/mês",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Assinar Agora", url=LINK_COMPRA)]
+                ]),
+            )
         return
 
+    # ── Processar vídeo ──
     message_text = update.message.text or ""
     urls = URL_PATTERN.findall(message_text)
 
@@ -401,6 +499,10 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Não foi possível enviar o arquivo:\n{e}")
 
     if send_ok:
+        # ── Registrar uso após sucesso ──
+        loop = asyncio.get_event_loop()
+        usos = await loop.run_in_executor(None, db.registrar_uso, user.id)
+
         ai_label = "🤖 IA" if desc.get("used_ai") else "📝 Template"
 
         desc_id = str(uuid.uuid4())[:8]
@@ -412,8 +514,18 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "description":   original_desc,
         }
 
+        # Mensagem com contador de uso (só para quem tem limite)
+        limite = info['limite_diario']
+        if limite > 0 and not info['is_admin']:
+            restantes = limite - usos
+            uso_info = f"\n\n📊 Usos: {usos}/{limite} | Restam: {restantes}"
+            if restantes <= 1 and not info['is_pago']:
+                uso_info += "\n⚡ _Quase no limite! Faça upgrade para continuar._"
+        else:
+            uso_info = ""
+
         await update.message.reply_text(
-            f"✅ *Descrições prontas* — {ai_label}\n\nEscolha o que deseja:",
+            f"✅ *Descrições prontas* — {ai_label}\n\nEscolha o que deseja:{uso_info}",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=build_keyboard(desc_id),
         )
@@ -504,8 +616,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Mensagens desconhecidas
 # ──────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_authorized(update.effective_user.id):
-        return
     await update.message.reply_text(
         "🤔 Me envie um link de vídeo para começar!\n"
         "Use /ajuda para ver as instruções."

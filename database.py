@@ -26,7 +26,7 @@ def _get_conn():
 
 def criar_tabelas():
     """Cria as tabelas necessárias se não existirem."""
-    sql = """
+    sql_usuarios = """
     CREATE TABLE IF NOT EXISTS usuarios (
         telegram_id     BIGINT PRIMARY KEY,
         nome            TEXT,
@@ -38,11 +38,20 @@ def criar_tabelas():
         data_cadastro   TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
     """
+    sql_uso_diario = """
+    CREATE TABLE IF NOT EXISTS uso_diario (
+        telegram_id    BIGINT,
+        data_uso       DATE DEFAULT CURRENT_DATE,
+        usos           INTEGER DEFAULT 0,
+        PRIMARY KEY (telegram_id, data_uso)
+    );
+    """
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql_usuarios)
+            cur.execute(sql_uso_diario)
         conn.commit()
-    logger.info("Tabelas do banco de dados verificadas.")
+    logger.info("Tabelas do banco de dados verificadas (usuarios + uso_diario).")
 
 
 def adicionar_usuario(
@@ -156,7 +165,7 @@ def desativar_expirados() -> list:
 
 def estatisticas() -> dict:
     """Retorna estatísticas gerais dos usuários."""
-    sql = """
+    sql_usuarios = """
     SELECT
         COUNT(*) FILTER (WHERE ativo = TRUE)                            AS ativos,
         COUNT(*) FILTER (WHERE ativo = FALSE)                           AS inativos,
@@ -164,7 +173,61 @@ def estatisticas() -> dict:
         COUNT(*) FILTER (WHERE ativo = TRUE AND data_expiracao > NOW()) AS com_plano_ativo
     FROM usuarios;
     """
+    sql_uso = """
+    SELECT
+        COUNT(DISTINCT telegram_id) AS usuarios_gratis_hoje,
+        COALESCE(SUM(usos), 0)     AS total_usos_hoje
+    FROM uso_diario
+    WHERE data_uso = CURRENT_DATE;
+    """
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql)
-            return dict(cur.fetchone())
+            cur.execute(sql_usuarios)
+            stats = dict(cur.fetchone())
+            cur.execute(sql_uso)
+            stats.update(dict(cur.fetchone()))
+            return stats
+
+
+# ──────────────────────────────────────────────
+# Funções do sistema freemium
+# ──────────────────────────────────────────────
+def registrar_uso(telegram_id: int) -> int:
+    """Incrementa e retorna o número de usos do dia."""
+    sql = """
+    INSERT INTO uso_diario (telegram_id, data_uso, usos)
+    VALUES (%s, CURRENT_DATE, 1)
+    ON CONFLICT (telegram_id, data_uso) DO UPDATE SET
+        usos = uso_diario.usos + 1
+    RETURNING usos;
+    """
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_id,))
+            result = cur.fetchone()[0]
+        conn.commit()
+    return result
+
+
+def consultar_usos_hoje(telegram_id: int) -> int:
+    """Retorna quantos vídeos o usuário processou hoje."""
+    sql = "SELECT usos FROM uso_diario WHERE telegram_id = %s AND data_uso = CURRENT_DATE;"
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_id,))
+            row = cur.fetchone()
+    return row[0] if row else 0
+
+
+def get_plano_usuario(telegram_id: int) -> Optional[str]:
+    """Retorna o nome do plano do usuário ativo ou None."""
+    sql = """
+    SELECT plano FROM usuarios
+    WHERE telegram_id = %s AND ativo = TRUE
+      AND (data_expiracao IS NULL OR data_expiracao > NOW());
+    """
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_id,))
+            row = cur.fetchone()
+    return row[0] if row else None
