@@ -7,17 +7,18 @@ Funcionalidades:
   - Recebe links de TikTok, Instagram, Pinterest, YouTube e MP4
   - Baixa o vídeo sem marca d'água usando yt-dlp
   - Remove metadados com FFmpeg
-  - Gera descrições prontas para grupos e Stories com Gemini AI
-  - Devolve tudo no Telegram
-
-Uso:
-  python bot.py
+  - Gera descrição e hashtags com Gemini AI
+  - Sistema de acesso pago integrado com Kiwify + PostgreSQL
+  - Webhook HTTP para ativação automática de assinaturas
+  - Verificação diária de planos expirados
 """
 
+import asyncio
 import logging
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -34,15 +35,35 @@ from telegram.constants import ParseMode, ChatAction
 from downloader import download_video, cleanup_file, detect_platform
 from cleaner import remove_metadata, get_file_size_mb, ffmpeg_available
 from generator import generate_description, generate_hashtags, setup_gemini
+import database as db
+import webhook as wh
+import admin as adm
+
+load_dotenv()
 
 # ──────────────────────────────────────────────
-# Armazenamento temporário para callbacks dos botões
-# chave: desc_id (uuid) → dados do vídeo/descrição
+# Configuração
 # ──────────────────────────────────────────────
+BOT_TOKEN      = os.getenv("TELEGRAM_BOT_TOKEN", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+ADMIN_ID       = int(os.getenv("ADMIN_ID", "0"))
+MAX_FILE_SIZE_MB = 50
+
+URL_PATTERN = re.compile(
+    r"https?://[^\s]+"
+    r"|www\.[^\s]+"
+    r"|(?:tiktok|instagram|youtube|pinterest)\.com/[^\s]+",
+    re.IGNORECASE,
+)
+
+# Armazenamento temporário para callbacks dos botões inline
 _pending: dict[str, dict] = {}
 
+# Referência global ao app (usada pelo webhook para enviar boas-vindas)
+_bot_app: Application | None = None
+
 # ──────────────────────────────────────────────
-# Configuração de logs
+# Logs
 # ──────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -57,31 +78,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
 
 # ──────────────────────────────────────────────
-# Carrega variáveis de ambiente
-# ──────────────────────────────────────────────
-load_dotenv()
-
-BOT_TOKEN        = os.getenv("TELEGRAM_BOT_TOKEN", "")
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")
-ALLOWED_USERS_RAW = os.getenv("ALLOWED_USERS", "")
-
-ALLOWED_USERS: set[int] = set()
-if ALLOWED_USERS_RAW.strip():
-    for uid in ALLOWED_USERS_RAW.split(","):
-        uid = uid.strip()
-        if uid.isdigit():
-            ALLOWED_USERS.add(int(uid))
-
-MAX_FILE_SIZE_MB = 50
-
-URL_PATTERN = re.compile(
-    r"https?://[^\s]+"
-    r"|www\.[^\s]+"
-    r"|(?:tiktok|instagram|youtube|pinterest)\.com/[^\s]+",
-    re.IGNORECASE,
-)
-
-# ──────────────────────────────────────────────
 # Mensagens
 # ──────────────────────────────────────────────
 MSG_WELCOME = (
@@ -93,35 +89,29 @@ MSG_WELCOME = (
     "• 📌 Pinterest\n"
     "• ▶️ YouTube\n"
     "• 🎬 Link MP4 direto\n\n"
-    "O que faço:\n"
-    "✅ Baixo o vídeo *sem marca d'água*\n"
-    "✅ Removo todos os metadados/rastreio\n"
-    "✅ Gero descrição pronta para grupos e Stories\n"
-    "✅ Te devolvo tudo aqui\n\n"
-    "*Comandos:* /ajuda /status"
+    "✅ Baixo sem marca d'água\n"
+    "✅ Removo metadados\n"
+    "✅ Gero descrição e hashtags com IA\n\n"
+    "*Comandos:* /ajuda /status /meuacesso"
 )
 
-MSG_AJUDA = (
-    "💡 *Dicas de Uso*\n\n"
-    "*Plataformas suportadas:*\n"
-    "• TikTok: link do vídeo ou perfil\n"
-    "• Instagram: link de Reels ou Post público\n"
-    "• YouTube: link normal, shorts ou youtu\\.be\n"
-    "• Pinterest: link de pin com vídeo\n"
-    "• MP4: qualquer URL terminando em \\.mp4\n\n"
-    "⚠️ *Avisos:*\n"
-    "• Vídeos privados não funcionam\n"
-    "• Limite de 50MB para envio\n"
-    "• Se falhar, atualize: `pip install \\-U yt\\-dlp`"
+MSG_SEM_ACESSO = (
+    "⛔ *Acesso não autorizado*\n\n"
+    "Para usar o bot, adquira um plano e informe seu ID do Telegram no checkout\\.\n\n"
+    "🆔 *Seu ID:* `{user_id}`\n\n"
+    "_Copie esse número e cole no campo \"ID do Telegram\" durante a compra\\._"
 )
 
 # ──────────────────────────────────────────────
-# Helpers
+# Autorização via banco de dados
 # ──────────────────────────────────────────────
-def is_authorized(user_id: int) -> bool:
-    if not ALLOWED_USERS:
+async def is_authorized(user_id: int) -> bool:
+    """Admin sempre tem acesso. Demais verificam no banco de dados."""
+    if user_id == ADMIN_ID:
         return True
-    return user_id in ALLOWED_USERS
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, db.verificar_acesso, user_id)
+
 
 def md_escape(text: str) -> str:
     """Escapa caracteres especiais para MarkdownV2."""
@@ -144,57 +134,179 @@ def build_keyboard(desc_id: str) -> InlineKeyboardMarkup:
     ])
 
 # ──────────────────────────────────────────────
+# Callback de boas-vindas (chamado pelo webhook)
+# ──────────────────────────────────────────────
+async def enviar_boas_vindas(telegram_id: int, nome: str, plano: str):
+    """Envia mensagem de boas-vindas quando usuário é ativado via Kiwify."""
+    if not _bot_app:
+        return
+    expiry = "Vitalício ♾️" if plano.lower() in ("vitalício", "vitalicio", "lifetime") else f"Plano: {plano}"
+    msg = (
+        f"🎉 *Bem\\-vindo, {md_escape(nome)}\\!*\n\n"
+        f"Seu acesso ao *Bot de Afiliados* foi ativado\\!\n"
+        f"✅ {md_escape(expiry)}\n\n"
+        f"Envie um link de vídeo e eu cuido do resto\\.\n"
+        f"Use /meuacesso para ver os detalhes do seu plano\\."
+    )
+    try:
+        await _bot_app.bot.send_message(
+            chat_id=telegram_id,
+            text=msg,
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        logger.info(f"Boas-vindas enviadas para {telegram_id}")
+    except Exception as e:
+        logger.warning(f"Não foi possível enviar boas-vindas para {telegram_id}: {e}")
+
+
+async def enviar_cancelamento(telegram_id: int):
+    """Notifica usuário que o acesso foi cancelado."""
+    if not _bot_app:
+        return
+    try:
+        await _bot_app.bot.send_message(
+            chat_id=telegram_id,
+            text=(
+                "⚠️ *Seu acesso foi cancelado*\n\n"
+                "Se isso foi um erro, entre em contato com o suporte\\.\n"
+                "Para renovar, adquira um novo plano\\."
+            ),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+    except Exception as e:
+        logger.warning(f"Não foi possível notificar cancelamento para {telegram_id}: {e}")
+
+# ──────────────────────────────────────────────
+# Job diário: desativa planos expirados
+# ──────────────────────────────────────────────
+async def verificar_expirados():
+    """Desativa usuários com plano vencido e os notifica."""
+    logger.info("Verificando planos expirados...")
+    loop = asyncio.get_event_loop()
+    expirados = await loop.run_in_executor(None, db.desativar_expirados)
+    for u in expirados:
+        logger.info(f"Plano expirado: {u['telegram_id']} ({u.get('nome', '?')})")
+        await enviar_cancelamento(u["telegram_id"])
+    if expirados:
+        logger.info(f"{len(expirados)} plano(s) expirado(s) desativado(s).")
+
+# ──────────────────────────────────────────────
 # Handlers de comandos
 # ──────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("⛔ Você não tem permissão para usar este bot.")
+    user       = update.effective_user
+    authorized = await is_authorized(user.id)
+
+    id_block = (
+        f"🆔 *Seu ID do Telegram:* `{user.id}`\n"
+        f"_Guarde este número para usar no checkout ao comprar o plano\\._\n\n"
+    )
+
+    if not authorized:
+        await update.message.reply_text(
+            id_block + MSG_SEM_ACESSO.format(user_id=user.id),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
         return
-    await update.message.reply_text(MSG_WELCOME, parse_mode=ParseMode.MARKDOWN_V2)
+
+    await update.message.reply_text(
+        id_block + MSG_WELCOME,
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
+    if not await is_authorized(update.effective_user.id):
         return
-    await update.message.reply_text(MSG_AJUDA, parse_mode=ParseMode.MARKDOWN_V2)
+    msg = (
+        "💡 *Dicas de Uso*\n\n"
+        "*Plataformas suportadas:*\n"
+        "• TikTok, Instagram Reels, YouTube, Pinterest, MP4\n\n"
+        "⚠️ *Avisos:*\n"
+        "• Vídeos privados não funcionam\n"
+        "• Limite de 50MB por vídeo\n"
+        "• Use /meuacesso para ver seu plano"
+    )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+
+async def cmd_meuacesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if user.id == ADMIN_ID:
+        await update.message.reply_text(
+            "👑 Você é o *administrador* — acesso ilimitado\\.\\!",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
+
+    loop  = asyncio.get_event_loop()
+    dados = await loop.run_in_executor(None, db.buscar_usuario, user.id)
+
+    if not dados or not dados.get("ativo"):
+        await update.message.reply_text(
+            f"❌ Nenhum plano ativo encontrado\\.\n\n"
+            f"🆔 Seu ID: `{user.id}`\n"
+            f"Compre um plano e informe este ID no checkout\\.",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        return
+
+    expiry = dados.get("data_expiracao")
+    if expiry is None:
+        exp_str = "♾️ Vitalício"
+    else:
+        now          = datetime.now(timezone.utc)
+        dias_rest    = (expiry - now).days
+        data_fmt     = expiry.strftime("%d/%m/%Y")
+        exp_str      = f"📅 {data_fmt} \\({dias_rest} dias restantes\\)"
+
+    await update.message.reply_text(
+        f"✅ *Seu Plano*\n\n"
+        f"👤 Nome: {md_escape(dados.get('nome', ''))}\n"
+        f"📦 Plano: {md_escape(dados.get('plano', ''))}\n"
+        f"⏰ Validade: {exp_str}\n",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
+    if not await is_authorized(update.effective_user.id):
         return
 
     ffmpeg_ok = ffmpeg_available()
     gemini_ok = bool(GEMINI_API_KEY and GEMINI_API_KEY != "SUA_CHAVE_GEMINI_AQUI")
-    all_ok    = ffmpeg_ok and gemini_ok
+    db_ok     = True
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, db.estatisticas)
+    except Exception:
+        db_ok = False
+
+    all_ok = ffmpeg_ok and gemini_ok and db_ok
 
     lines = [
         "🔍 *Status do Bot*\n",
-        f"{'✅' if True    else '❌'} yt\\-dlp \\(download de vídeos\\)",
-        f"{'✅' if ffmpeg_ok else '⚠️'} FFmpeg \\(remoção de metadados\\)" + (
-            "" if ffmpeg_ok else " — *não instalado*"
-        ),
-        f"{'✅' if gemini_ok else '⚠️'} Gemini AI \\(gerador de descrições\\)" + (
-            "" if gemini_ok else " — *chave não configurada*"
-        ),
+        f"{'✅' if True      else '❌'} yt\\-dlp \\(download de vídeos\\)",
+        f"{'✅' if ffmpeg_ok else '⚠️'} FFmpeg \\(remoção de metadados\\)" + ("" if ffmpeg_ok else " — *não instalado*"),
+        f"{'✅' if gemini_ok else '⚠️'} Gemini AI \\(gerador de descrições\\)" + ("" if gemini_ok else " — *chave não configurada*"),
+        f"{'✅' if db_ok     else '❌'} PostgreSQL \\(banco de dados\\)" + ("" if db_ok else " — *erro de conexão*"),
         "",
         "🟢 Tudo operacional\\!" if all_ok else "🟡 Funcionando com recursos limitados",
     ]
-
-    if not ffmpeg_ok:
-        lines.append("\n💡 Instalar FFmpeg: https://ffmpeg\\.org/download\\.html")
-    if not gemini_ok:
-        lines.append("💡 Configure GEMINI\\_API\\_KEY no \\.env")
-
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN_V2)
 
 
 # ──────────────────────────────────────────────
-# Handler principal: recebe links
+# Handler principal: processa links
 # ──────────────────────────────────────────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_authorized(user.id):
-        await update.message.reply_text("⛔ Acesso não autorizado.")
+    if not await is_authorized(user.id):
+        await update.message.reply_text(
+            MSG_SEM_ACESSO.format(user_id=user.id),
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
         return
 
     message_text = update.message.text or ""
@@ -210,13 +322,11 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url      = urls[0].strip()
     platform = detect_platform(url)
 
-    # ── Etapa 1: Avisa que está processando
     status_msg = await update.message.reply_text(
         f"⏳ Baixando vídeo do {platform}... aguarde! 🔄"
     )
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_VIDEO)
 
-    # ── Etapa 2: Download
     logger.info(f"[{user.id}] Download: {url}")
     dl = await download_video(url)
 
@@ -227,21 +337,17 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    video_path   = dl["file_path"]
-    video_title  = dl["title"]
-    video_dur    = dl["duration"]
+    video_path    = dl["file_path"]
+    video_title   = dl["title"]
+    video_dur     = dl["duration"]
     original_desc = dl.get("description", "")
 
-    # ── Etapa 3: Remove metadados
     await status_msg.edit_text("🧹 Removendo metadados e rastreadores...")
+    clean      = await remove_metadata(video_path)
+    final_path = clean.get("output_path", video_path)
+    has_ffmpeg = clean.get("error") != "ffmpeg_missing"
 
-    clean       = await remove_metadata(video_path)
-    final_path  = clean.get("output_path", video_path)
-    has_ffmpeg  = clean.get("error") != "ffmpeg_missing"
-
-    # ── Etapa 4: Gera descrições
-    await status_msg.edit_text("✍️ Gerando descrições para afiliados com IA...")
-
+    await status_msg.edit_text("✍️ Gerando descrição e hashtags com IA...")
     desc = await generate_description(
         title=video_title,
         platform=platform,
@@ -249,14 +355,12 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
         duration=video_dur,
     )
 
-    # ── Etapa 5: Verifica tamanho
     file_size = get_file_size_mb(final_path)
     logger.info(f"[{user.id}] Pronto: {file_size} MB")
 
     await status_msg.edit_text(f"📤 Enviando vídeo ({file_size} MB)...")
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_VIDEO)
 
-    # ── Etapa 6: Envia vídeo
     send_ok = False
     try:
         if file_size > MAX_FILE_SIZE_MB:
@@ -296,31 +400,24 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Erro ao enviar documento: {e2}")
             await update.message.reply_text(f"❌ Não foi possível enviar o arquivo:\n{e}")
 
-    # ── Etapa 7: Envia descrições com botões inline
     if send_ok:
         ai_label = "🤖 IA" if desc.get("used_ai") else "📝 Template"
 
-        # Salva dados para os callbacks dos botões
         desc_id = str(uuid.uuid4())[:8]
         _pending[desc_id] = {
-            "group_post":   desc["group_post"],
+            "group_post":    desc["group_post"],
             "story_caption": desc["story_caption"],
-            "title":        video_title,
-            "platform":     platform,
-            "description":  original_desc,
+            "title":         video_title,
+            "platform":      platform,
+            "description":   original_desc,
         }
 
-        caption_text = (
-            f"✅ *Descrições prontas* — {ai_label}\n\n"
-            f"Escolha o que deseja:"
-        )
         await update.message.reply_text(
-            caption_text,
+            f"✅ *Descrições prontas* — {ai_label}\n\nEscolha o que deseja:",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=build_keyboard(desc_id),
         )
 
-    # ── Etapa 8: Limpeza
     await status_msg.delete()
     cleanup_file(video_path)
     if final_path != video_path:
@@ -334,13 +431,13 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # remove o "carregando" do botão
+    await query.answer()
 
     data = query.data or ""
 
     if data.startswith("group_"):
         desc_id = data[6:]
-        entry = _pending.get(desc_id)
+        entry   = _pending.get(desc_id)
         if not entry:
             await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
             return
@@ -352,7 +449,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("story_"):
         desc_id = data[6:]
-        entry = _pending.get(desc_id)
+        entry   = _pending.get(desc_id)
         if not entry:
             await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
             return
@@ -364,7 +461,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("regen_"):
         desc_id = data[6:]
-        entry = _pending.get(desc_id)
+        entry   = _pending.get(desc_id)
         if not entry:
             await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
             return
@@ -374,10 +471,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             platform=entry["platform"],
             original_description=entry["description"],
         )
-        # Atualiza os dados salvos com a nova variação
-        entry["group_post"] = new_desc["group_post"]
+        entry["group_post"]    = new_desc["group_post"]
         entry["story_caption"] = new_desc["story_caption"]
-        _pending[desc_id] = entry
+        _pending[desc_id]      = entry
 
         ai_label = "🤖 IA" if new_desc.get("used_ai") else "📝 Template"
         await msg.edit_text(
@@ -388,7 +484,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("tags_"):
         desc_id = data[5:]
-        entry = _pending.get(desc_id)
+        entry   = _pending.get(desc_id)
         if not entry:
             await query.message.reply_text("⏳ Sessão expirada. Processe o vídeo novamente.")
             return
@@ -408,7 +504,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Mensagens desconhecidas
 # ──────────────────────────────────────────────
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_authorized(update.effective_user.id):
+    if not await is_authorized(update.effective_user.id):
         return
     await update.message.reply_text(
         "🤔 Me envie um link de vídeo para começar!\n"
@@ -428,12 +524,39 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
-# Inicialização
+# Inicialização — post_init roda antes do polling
+# ──────────────────────────────────────────────
+async def post_init(app: Application):
+    """Inicializa o banco, webhook e scheduler antes do bot começar."""
+    global _bot_app
+    _bot_app = app
+
+    # 1. Banco de dados
+    logger.info("Inicializando banco de dados...")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, db.criar_tabelas)
+
+    # 2. Webhook Kiwify
+    wh.set_callbacks(
+        on_activated=enviar_boas_vindas,
+        on_canceled=enviar_cancelamento,
+    )
+    await wh.iniciar_servidor()
+
+    # 3. Scheduler: verifica expirados a cada 24h
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(verificar_expirados, "interval", hours=24, id="verificar_expirados")
+    scheduler.start()
+    logger.info("Scheduler de expiração iniciado (intervalo: 24h).")
+
+
+# ──────────────────────────────────────────────
+# Main
 # ──────────────────────────────────────────────
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "SEU_TOKEN_AQUI":
         print("❌ ERRO: Configure o TELEGRAM_BOT_TOKEN no arquivo .env")
-        print("   Copie .env.example para .env e preencha seu token.")
         return
 
     has_gemini = bool(GEMINI_API_KEY and GEMINI_API_KEY != "SUA_CHAVE_GEMINI_AQUI")
@@ -441,17 +564,31 @@ def main():
         setup_gemini(GEMINI_API_KEY)
         logger.info("Gemini AI configurado.")
     else:
-        logger.warning("GEMINI_API_KEY nao configurada. Usando templates padrao.")
+        logger.warning("GEMINI_API_KEY não configurada. Usando templates padrão.")
 
     if not ffmpeg_available():
-        logger.warning("FFmpeg nao encontrado. Metadados NAO serao removidos.")
+        logger.warning("FFmpeg não encontrado. Metadados NÃO serão removidos.")
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
 
-    app.add_handler(CommandHandler("start",  cmd_start))
-    app.add_handler(CommandHandler("ajuda",  cmd_ajuda))
-    app.add_handler(CommandHandler("status", cmd_status))
+    # Comandos públicos
+    app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("ajuda",     cmd_ajuda))
+    app.add_handler(CommandHandler("status",    cmd_status))
+    app.add_handler(CommandHandler("meuacesso", cmd_meuacesso))
 
+    # Comandos admin
+    app.add_handler(CommandHandler("adduser",    adm.cmd_adduser))
+    app.add_handler(CommandHandler("removeuser", adm.cmd_removeuser))
+    app.add_handler(CommandHandler("usuarios",   adm.cmd_usuarios))
+    app.add_handler(CommandHandler("stats",      adm.cmd_stats))
+
+    # Mensagens
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(URL_PATTERN),
         handle_link,
@@ -461,18 +598,17 @@ def main():
         handle_unknown,
     ))
 
-    # Handler dos botões inline
+    # Botões inline
     app.add_handler(CallbackQueryHandler(button_callback))
 
     app.add_error_handler(error_handler)
 
     print("=" * 52)
-    print("   BOT DE AFILIADOS INICIADO")
+    print("   BOT DE AFILIADOS — MODO PRODUÇÃO")
     print("=" * 52)
-    print(f"   Python-telegram-bot : v22")
-    print(f"   FFmpeg              : {'OK' if ffmpeg_available() else 'NAO INSTALADO'}")
-    print(f"   Gemini AI           : {'Configurado' if has_gemini else 'NAO CONFIGURADO'}")
-    print(f"   Usuarios permitidos : {'Todos' if not ALLOWED_USERS else str(ALLOWED_USERS)}")
+    print(f"   FFmpeg    : {'OK' if ffmpeg_available() else 'NÃO INSTALADO'}")
+    print(f"   Gemini AI : {'Configurado' if has_gemini else 'NÃO CONFIGURADO'}")
+    print(f"   Admin ID  : {ADMIN_ID or 'NÃO CONFIGURADO'}")
     print("=" * 52)
     print("   Aguardando mensagens... (Ctrl+C para parar)\n")
 
