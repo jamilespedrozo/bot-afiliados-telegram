@@ -1,5 +1,5 @@
 python-telegram-bot>=22.0
-yt-dlp>=2024.1.1
+yt-dlp>=2024.12.13
 python-dotenv==1.0.0
 google-genai>=1.0.0
 aiofiles==23.2.1
