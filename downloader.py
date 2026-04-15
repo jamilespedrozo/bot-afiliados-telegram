@@ -43,14 +43,12 @@ def get_ydl_opts(output_path: str, platform: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": "mp4",
-        # Remove metadados e marca d'água sempre que possível
         "postprocessors": [
             {
                 "key": "FFmpegMetadata",
                 "add_metadata": False,
             }
         ],
-        # Prefere formato sem marca d'água
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
         "http_headers": {
             "User-Agent": (
@@ -62,21 +60,21 @@ def get_ydl_opts(output_path: str, platform: str) -> dict:
     }
 
     if platform == "TikTok":
-    base_opts.update(
-        {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "extractor_args": {
-                "tiktok": {
-                    "api_hostname": ["api22-normal-c-useast2a.tiktokv.com"],
-                    "app_version": ["35.1.3"],
-                }
-            },
-            "http_headers": {
-                "User-Agent": "TikTok/35.1.3 (iPhone; iOS 17.0; Scale/3.00)",
-                "Accept": "application/json",
-            },
-        }
-    )
+        base_opts.update(
+            {
+                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "extractor_args": {
+                    "tiktok": {
+                        "api_hostname": ["api22-normal-c-useast2a.tiktokv.com"],
+                        "app_version": ["35.1.3"],
+                    }
+                },
+                "http_headers": {
+                    "User-Agent": "TikTok/35.1.3 (iPhone; iOS 17.0; Scale/3.00)",
+                    "Accept": "application/json",
+                },
+            }
+        )
 
     elif platform == "Instagram":
         base_opts.update(
@@ -140,7 +138,6 @@ async def download_video(url: str) -> dict:
             result["duration"] = info.get("duration", 0)
             result["description"] = info.get("description", "")
 
-        # Procura o arquivo baixado (mp4 ou outro formato)
         downloaded = _find_downloaded_file(unique_id)
         if downloaded:
             result["file_path"] = downloaded
@@ -166,7 +163,6 @@ def _find_downloaded_file(unique_id: str) -> Optional[str]:
         path = DOWNLOADS_DIR / f"video_{unique_id}.{ext}"
         if path.exists() and path.stat().st_size > 0:
             return str(path)
-    # Busca genérica para qualquer arquivo com o unique_id
     for f in DOWNLOADS_DIR.iterdir():
         if unique_id in f.name and f.stat().st_size > 0:
             return str(f)
