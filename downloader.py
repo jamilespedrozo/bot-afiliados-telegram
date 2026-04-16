@@ -166,9 +166,9 @@ async def download_video(url: str) -> dict:
             info = await loop.run_in_executor(None, _run_download, opts)
 
             if info:
-                result["title"] = info.get("title", "Vídeo sem título")
-                result["duration"] = info.get("duration", 0)
-                result["description"] = info.get("description", "")
+                result["title"] = info.get("title") or "Vídeo sem título"
+                result["duration"] = info.get("duration") or 0
+                result["description"] = info.get("description") or ""
 
             downloaded = _find_downloaded_file(unique_id)
             if downloaded:

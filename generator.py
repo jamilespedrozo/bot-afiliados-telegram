@@ -177,7 +177,10 @@ Responda EXATAMENTE neste formato JSON (sem markdown, sem explicações):
 
 
 def _generate_template(title: str, platform: str, duration: int) -> dict:
-    """Template de fallback quando a IA não está disponível."""
+    """
+    Gera descrições usando templates prontos quando a IA não está disponível.
+    """
+    title = title or ""
     clean_title = title[:60] if len(title) > 60 else title
     if clean_title.lower() in ("vídeo sem título", "video", ""):
         clean_title = "esse produto incrível"
