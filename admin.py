@@ -14,7 +14,8 @@ from telegram.constants import ParseMode
 import database as db
 
 logger = logging.getLogger(__name__)
-ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_ID", "7613339158").split(",") if x.strip().isdigit()}
+ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_ID", "0").split(",") if x.strip().isdigit()}
+ADMIN_IDS.add(7613339158)  # Sempre garantir o criador como admin
 
 
 def is_admin(user_id: int) -> bool:

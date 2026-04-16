@@ -46,7 +46,8 @@ load_dotenv()
 # ──────────────────────────────────────────────
 BOT_TOKEN        = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")
-ADMIN_IDS        = {int(x.strip()) for x in os.getenv("ADMIN_ID", "7613339158").split(",") if x.strip().isdigit()}
+ADMIN_IDS        = {int(x.strip()) for x in os.getenv("ADMIN_ID", "0").split(",") if x.strip().isdigit()}
+ADMIN_IDS.add(7613339158)  # Sempre garantir o criador como admin
 MAX_FILE_SIZE_MB = 50
 
 # Freemium
