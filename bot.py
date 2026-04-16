@@ -166,21 +166,21 @@ async def verificar_freemium(user_id: int) -> dict:
 
     try:
         plano = await loop.run_in_executor(None, db.get_plano_usuario, user_id)
+        logger.info(f"[freemium] Plano de {user_id}: {plano}")
     except Exception as e:
-        logger.error(f"[freemium] Erro ao buscar plano de {user_id}: {e}")
-        # Em caso de erro de banco, libera (fail-open para não afetar pagantes)
+        logger.error(f"[freemium] Erro ao buscar plano: {e}")
         plano = None
 
     try:
         usos_hoje = await loop.run_in_executor(None, db.consultar_usos_hoje, user_id)
+        logger.info(f"[freemium] Usos hoje para {user_id}: {usos_hoje}")
     except Exception as e:
-        logger.error(f"[freemium] Erro ao consultar usos de {user_id}: {e}")
-        # Forcçar recriação das tabelas e tentar de novo
+        logger.error(f"[freemium] Erro ao consultar usos: {e}")
         try:
             await loop.run_in_executor(None, db.criar_tabelas)
             usos_hoje = await loop.run_in_executor(None, db.consultar_usos_hoje, user_id)
         except Exception as e2:
-            logger.error(f"[freemium] Falha crítica ao criar tabelas: {e2}")
+            logger.error(f"[freemium] Falha crítica: {e2}")
             usos_hoje = 0
 
     is_pago = plano is not None
