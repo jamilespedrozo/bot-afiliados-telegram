@@ -1,6 +1,6 @@
 """
 generator.py - Gera descrições prontas para afiliados usando Google Gemini
-Formatos: Post para grupos de afiliados + Instagram Story
+Formatos: Post para grupos de afiliados + Hashtags
 SDK: google-genai (versão atual e suportada)
 """
 
@@ -13,7 +13,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Tenta importar o novo SDK do Gemini
 try:
     from google import genai
     from google.genai import types as genai_types
@@ -44,13 +43,13 @@ async def generate_description(
     duration: int = 0,
 ) -> dict:
     """
-    Gera dois tipos de descrição para afiliados:
-      1. Post para grupos de afiliados (WhatsApp/Telegram)
-      2. Legenda para Instagram Story
+    Gera dois tipos de conteúdo para afiliados:
+      1. Legenda vendedora para grupos (WhatsApp/Telegram)
+      2. Hashtags nichadas e relevantes
 
     Retorna:
-      - group_post (str) — texto para grupos
-      - story_caption (str) — legenda para Story
+      - group_post (str) — legenda vendedora
+      - story_caption (str) — hashtags
       - used_ai (bool) — se usou IA ou template padrão
     """
     result = {
@@ -59,9 +58,6 @@ async def generate_description(
         "used_ai": False,
     }
 
-    api_key = os.getenv("GEMINI_API_KEY", "")
-
-    # Tenta usar IA se disponível e configurada
     if GEMINI_AVAILABLE and _gemini_client:
         try:
             ai_result = await _generate_with_gemini(
@@ -74,7 +70,6 @@ async def generate_description(
         except Exception as e:
             logger.warning(f"Gemini falhou, usando template padrão: {e}")
 
-    # Fallback: template padrão inteligente
     result.update(_generate_template(title, platform, duration))
     return result
 
@@ -85,38 +80,52 @@ async def _generate_with_gemini(
     original_description: str,
     duration: int,
 ) -> Optional[dict]:
-    """Usa o Google Gemini para gerar descrições criativas e persuasivas."""
+    """Usa o Google Gemini para gerar legendas vendedoras e hashtags para afiliados."""
 
     duration_text = f"{duration}s" if duration > 0 else "curto"
     desc_context = (
-        f"\nDescrição original: {original_description[:300]}"
+        f"\nDescrição original do vídeo: {original_description[:400]}"
         if original_description
         else ""
     )
 
-    prompt = f"""Você é um especialista em conteúdo digital para afiliados no Brasil.
+    prompt = f"""Você é um copywriter especialista em marketing de afiliados no Brasil, com foco em conversão e engajamento nas redes sociais.
 
 Recebi um vídeo da plataforma {platform}.
-Título: "{title}"{desc_context}
+Título do vídeo: "{title}"{desc_context}
 Duração: {duration_text}
 
-Gere uma DESCRIÇÃO SIMPLES E DIRETA do produto ou serviço mostrado no vídeo.
+Sua missão é criar dois conteúdos prontos para um afiliado publicar:
 
-Regras para a descrição:
-- Explique O QUE É o produto/serviço em 2 a 4 linhas
-- Diga quais são os principais benefícios ou resultados
-- Linguagem natural, sem fórmulas de vendas, sem urgência, sem “clica no link”
-- Use emojis de forma discreta (máx 3)
-- Sem hashtags na descrição
+━━━━━━━━━━━━━━━━━━
+1. LEGENDA VENDEDORA (group_post)
+━━━━━━━━━━━━━━━━━━
+Escreva uma legenda curta e persuasiva para publicar junto com o vídeo em grupos de WhatsApp e Telegram.
 
-Regras para as hashtags:
-- Gere exatamente 15 hashtags relevantes ao nicho do produto
-- Misture populares e nichadas
+Regras:
+- Comece com um emoji de impacto + frase de gancho que prende atenção (ex: "Esse produto mudou minha rotina 🔥")
+- Destaque o principal benefício ou resultado do produto em 1-2 linhas
+- Crie senso de oportunidade ou urgência de forma natural (sem parecer spam)
+- Finalize com uma chamada para ação curta e direta (ex: "Link na bio 👆", "Corre antes de acabar 🏃", "Comenta QUERO que te mando o link!")
+- Tom: animado, humano, como se fosse uma amiga indicando algo que gostou
+- Máx 6 linhas no total
+- Use emojis estrategicamente (4 a 6 emojis)
+- Sem hashtags na legenda
+
+━━━━━━━━━━━━━━━━━━
+2. HASHTAGS (story_caption)
+━━━━━━━━━━━━━━━━━━
+Gere exatamente 18 hashtags relevantes ao nicho do produto.
+
+Regras:
+- Misture: 6 populares (ex: #oferta #produtosvirais) + 6 de nicho (ex: #cafeteiraportatil) + 6 de afiliado (ex: #indicaçãoboa #compreonline)
+- Todas em português
 - Apenas as hashtags, sem texto extra
 
-Responda EXATAMENTE neste formato JSON (sem markdown):
+━━━━━━━━━━━━━━━━━━
+Responda EXATAMENTE neste formato JSON (sem markdown, sem explicações):
 {{
-  "group_post": "descrição do produto aqui",
+  "group_post": "legenda vendedora aqui",
   "story_caption": "#hashtag1 #hashtag2 #hashtag3 ..."
 }}"""
 
@@ -125,8 +134,8 @@ Responda EXATAMENTE neste formato JSON (sem markdown):
             model="gemini-2.0-flash",
             contents=prompt,
             config=genai_types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=500,
+                temperature=0.9,
+                max_output_tokens=700,
             ),
         )
         return response.text
@@ -134,7 +143,6 @@ Responda EXATAMENTE neste formato JSON (sem markdown):
     loop = asyncio.get_event_loop()
     raw = await loop.run_in_executor(None, _call_gemini)
 
-    # Remove possíveis blocos de código markdown
     raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
 
     try:
@@ -150,11 +158,12 @@ Responda EXATAMENTE neste formato JSON (sem markdown):
 
 def _generate_template(title: str, platform: str, duration: int) -> dict:
     """
-    Gera descrições usando templates prontos quando a IA não está disponível.
+    Template de fallback quando a IA não está disponível.
+    Mais vendedor do que antes.
     """
     clean_title = title[:60] if len(title) > 60 else title
     if clean_title.lower() in ("vídeo sem título", "video", ""):
-        clean_title = "esse conteúdo incrível"
+        clean_title = "esse produto incrível"
 
     platform_emoji = {
         "TikTok": "🎵",
@@ -164,21 +173,22 @@ def _generate_template(title: str, platform: str, duration: int) -> dict:
         "MP4 Direto": "🎬",
         "Web": "🌐",
     }
-    emoji = platform_emoji.get(platform, "🎬")
+    emoji = platform_emoji.get(platform, "🔥")
 
     group_post = (
-        f"{emoji} {clean_title}\n\n"
-        f"✅ Conteúdo de {platform} com dicas e informações úteis\n"
-        f"📍 Assista e descubra mais sobre esse assunto"
+        f"{emoji} *{clean_title}*\n\n"
+        f"✅ Esse produto está bombando e eu precisava compartilhar com vocês!\n"
+        f"🛒 Qualidade comprovada, preço que vale muito a pena\n"
+        f"👇 Comenta QUERO que te mando o link direto!"
     )
 
-    # Hashtags padrão por plataforma
     platform_tag = f"#{platform.lower().replace(' ', '')}"
     story_caption = (
-        f"#conteúdo #dicas #viral {platform_tag} "
-        f"#digital #aprenda #trending #brasil "
-        f"#descoberta #novidade #informação #top "
-        f"#recomendo #assista #valeudemais"
+        f"#oferta #produtosviral #compraonline #indicação #afiliados "
+        f"#marketingdigital #rendaextra {platform_tag} "
+        f"#promoção #acheibarato #valedapena #melhorpreço "
+        f"#comprerecomendo #dicaboa #produtosincriveis #viral "
+        f"#tendencia #novidade"
     )
 
     return {
@@ -194,7 +204,6 @@ async def generate_hashtags(
 ) -> str:
     """
     Gera um bloco de hashtags relevantes para afiliados.
-    Retorna uma string com ~20 hashtags prontas para copiar.
     """
     if GEMINI_AVAILABLE and _gemini_client:
         try:
@@ -203,12 +212,10 @@ async def generate_hashtags(
 Vídeo da plataforma {platform}, título: "{title}"
 {"Descrição: " + original_description[:200] if original_description else ""}
 
-Gere exatamente 20 hashtags relevantes em português para uso em posts de afiliados.
-Misture hashtags: populares (amplo alcance) + nichadas (engajamento) + de ação.
+Gere exatamente 20 hashtags em português para afiliados publicarem junto com vídeos de produtos.
+Misture: populares + nichadas ao produto + de compra/oferta.
 
 Responda APENAS as hashtags em uma linha, separadas por espaço, começando com #.
-Exemplo: #afiliados #marketingdigital #rendaextra ...
-
 Nada mais além das hashtags."""
 
             def _call():
@@ -229,12 +236,10 @@ Nada mais além das hashtags."""
         except Exception as e:
             logger.warning(f"Gemini hashtags falhou: {e}")
 
-    # Fallback: hashtags padrão para afiliados
     platform_tag = f"#{platform.lower().replace(' ', '')}"
     return (
-        f"#afiliados #marketingdigital #rendaextra #trabalhoonline "
-        f"#empreendedorismo #ganhedinheiro #negociodigital {platform_tag} "
-        f"#conteudodigital #marketingdeafiliados #vendasonline #lucro "
-        f"#liberdadefinanceira #dinheiro #sucesso #motivacao "
-        f"#dicasdemarketing #tudodigital #brasilempreendedor #riqueza"
+        f"#afiliados #marketingdigital #rendaextra #oferta #promoção "
+        f"#compraonline #indicação #produtosviral #acheibarato {platform_tag} "
+        f"#valedapena #melhorpreço #comprerecomendo #dicaboa #tendencia "
+        f"#viral #novidade #trabalhoonline #negociodigital #empreendedorismo"
     )
