@@ -349,9 +349,12 @@ async def cmd_meuacesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"_O limite reseta todo dia à meia\\-noite\\._\n\n"
             f"⬆️ *Faça upgrade* para processar mais vídeos\\!",
             parse_mode=ParseMode.MARKDOWN_V2,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚀 Ver Planos", url=LINK_COMPRA)]
-            ]),
+                    reply_markup=InlineKeyboardMarkup([
+                        [
+                            InlineKeyboardButton("🛒 Ver Planos", url=LINK_COMPRA),
+                            InlineKeyboardButton("💬 Suporte", url="https://t.me/seu_suporte")
+                        ],
+                    ]),
         )
 
 
@@ -398,8 +401,8 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     f"⚠️ *Limite diário atingido*\n\n"
                     f"✅ Você usou *{usos}/{limite}* vídeos do seu plano hoje.\n"
-                    f"O limite reseta à meia-noite.\n\n"
-                    f"🚀 Faça upgrade para *ilimitado*!",
+                    f"🔄 O limite reseta à meia-noite.\n\n"
+                    f"🚀 Desbloqueie vídeos ilimitados!",
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🛒 Fazer Upgrade", url=LINK_COMPRA)]
@@ -408,37 +411,24 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text(
                     f"🔒 *Limite grátis atingido!*\n\n"
-                    f"Você já usou seus *{FREE_USAGE_LIMIT} vídeos grátis* de hoje.\n"
-                    f"O limite reseta todo dia à meia-noite.\n\n"
-                    f"✅ Seu ID: `{user.id}`\n"
-                    f"_Informe este ID no checkout ao comprar._\n\n"
-                    f"🌟 *Starter* → 15 vídeos/dia → R$37/mês\n"
-                    f"🌟 *Pro* → Ilimitado → R$67/mês\n"
-                    f"🌟 *Black* → Ilimitado + extras → R$97/mês",
+                    f"Você usou seus *{FREE_USAGE_LIMIT} vídeos grátis* de hoje.\n"
+                    f"🔄 O limite reseta à meia-noite.\n\n"
+                    f"💡 *Seu ID:* `{user.id}`\n"
+                    f"_Use este ID ao finalizar a compra._",
                     parse_mode=ParseMode.MARKDOWN,
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🛒 Assinar Agora", url=LINK_COMPRA)]
+                        [
+                            InlineKeyboardButton("🛒 Ver Planos", url=LINK_COMPRA),
+                            InlineKeyboardButton("💬 Suporte", url="https://t.me/seu_suporte")
+                        ],
                     ]),
                 )
         except Exception as e:
-            logger.error(f"[freemium] Erro ao enviar mensagem de limite: {e}")
+            logger.error(f"[freemium] Erro ao enviar mensagem: {e}")
             await update.message.reply_text(
-                "⚠️ Limite atingido. Faça upgrade para continuar: " + LINK_COMPRA
-            )
-        else:
-            # Usuário grátis atingiu o limite
-            await update.message.reply_text(
-                f"⛔ *Limite grátis atingido\\!*\n\n"
-                f"Você já usou seus *{FREE_USAGE_LIMIT} vídeos grátis* de hoje\\.\n"
-                f"O limite reseta todo dia à meia\\-noite\\.\n\n"
-                f"🆔 Seu ID: `{user.id}`\n"
-                f"_Informe este ID no checkout ao comprar\\._\n\n"
-                f"🟢 *Starter* — 15 vídeos/dia — R\\$37/mês\n"
-                f"🟡 *Pro* — Ilimitado — R\\$67/mês\n"
-                f"🔵 *Black* — Ilimitado \\+ extras — R\\$97/mês",
-                parse_mode=ParseMode.MARKDOWN_V2,
+                "⚠️ Limite atingido.",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🚀 Assinar Agora", url=LINK_COMPRA)]
+                    [InlineKeyboardButton("🛒 Upgrade", url=LINK_COMPRA)]
                 ]),
             )
         return
