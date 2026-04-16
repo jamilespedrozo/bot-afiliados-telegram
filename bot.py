@@ -51,7 +51,7 @@ MAX_FILE_SIZE_MB = 50
 
 # Freemium
 FREE_USAGE_LIMIT = int(os.getenv("FREE_USAGE_LIMIT", "3"))
-LINK_COMPRA      = os.getenv("LINK_COMPRA", "https://charm-craft-sell.lovable.app")
+LINK_COMPRA      = os.getenv("LINK_COMPRA", "https://charm-craft-sell.lovable.app").strip()
 
 # Limites diários por plano (0 = ilimitado)
 LIMITES_PLANO = {
