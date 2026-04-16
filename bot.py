@@ -691,7 +691,31 @@ async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Handler global de erros
 # ──────────────────────────────────────────────
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Erro: {context.error}", exc_info=context.error)
+    error_msg = f"{type(context.error).__name__}: {context.error}"
+    logger.error(f"Erro: {error_msg}", exc_info=context.error)
+    
+    # Envia erro detalhado para o admin no Telegram
+    if ADMIN_ID and _bot_app:
+        try:
+            chat_info = ""
+            if isinstance(update, Update) and update.effective_chat:
+                chat_info = f"\nChat: {update.effective_chat.id} ({update.effective_chat.title or 'privado'})"
+            user_info = ""
+            if isinstance(update, Update) and update.effective_user:
+                user_info = f"\nUsuário: {update.effective_user.id} (@{update.effective_user.username or 'sem user'})"
+            
+            await _bot_app.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"🚨 *ERRO NO BOT*\n\n"
+                     f"```\n{error_msg}\n```"
+                     f"{user_info}{chat_info}\n\n"
+                     f"Veja os logs completos no Railway.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+        except Exception as e:
+            logger.warning(f"Não foi possível notificar admin do erro: {e}")
+    
+    # Mensagem genérica para o usuário
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text(
             "⚠️ Ocorreu um erro inesperado. Tente novamente."
