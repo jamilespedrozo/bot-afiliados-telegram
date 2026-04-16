@@ -35,28 +35,39 @@ def detect_platform(url: str) -> str:
         return "Web"
 
 
+def _get_cookie_file() -> Optional[str]:
+    """Procura arquivo de cookies netscape no diretório do projeto."""
+    for name in ["cookies.txt", "youtube_cookies.txt", "tiktok_cookies.txt"]:
+        path = DOWNLOADS_DIR / name
+        if path.exists():
+            return str(path.absolute())
+    cookie_env = os.getenv("COOKIE_FILE_PATH")
+    if cookie_env and Path(cookie_env).exists():
+        return cookie_env
+    return None
+
+
 def get_ydl_opts(output_path: str, platform: str) -> dict:
     """Retorna opções personalizadas por plataforma para yt-dlp."""
+    cookie_path = _get_cookie_file()
     base_opts = {
         "outtmpl": output_path,
         "quiet": True,
         "no_warnings": True,
         "merge_output_format": "mp4",
-        "postprocessors": [
-            {
-                "key": "FFmpegMetadata",
-                "add_metadata": False,
-            }
-        ],
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
+                "Chrome/124.0.0.0 Safari/537.36"
             )
         },
+        "extractor_retries": 3,
     }
+
+    if cookie_path:
+        base_opts["cookiefile"] = cookie_path
 
     if platform == "TikTok":
         base_opts.update(
@@ -120,7 +131,6 @@ async def download_video(url: str) -> dict:
             info = ydl.extract_info(url, download=True)
             return info
 
-    # Estratégias de fallback para TikTok
     strategies = [get_ydl_opts(output_template, platform)]
 
     if platform == "TikTok":
