@@ -14,11 +14,11 @@ from telegram.constants import ParseMode
 import database as db
 
 logger = logging.getLogger(__name__)
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_IDS = {int(x.strip()) for x in os.getenv("ADMIN_ID", "7613339158").split(",") if x.strip().isdigit()}
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id == ADMIN_ID
+    return user_id in ADMIN_IDS
 
 
 # ──────────────────────────────────────────────

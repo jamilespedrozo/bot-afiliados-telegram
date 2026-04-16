@@ -46,7 +46,7 @@ load_dotenv()
 # ──────────────────────────────────────────────
 BOT_TOKEN        = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")
-ADMIN_ID         = int(os.getenv("ADMIN_ID", "7613339158"))
+ADMIN_IDS        = {int(x.strip()) for x in os.getenv("ADMIN_ID", "7613339158").split(",") if x.strip().isdigit()}
 MAX_FILE_SIZE_MB = 50
 
 # Freemium
@@ -158,7 +158,7 @@ async def verificar_freemium(user_id: int) -> dict:
         'limite_diario': int,  # 0 = ilimitado
     }
     """
-    if user_id == ADMIN_ID:
+    if user_id in ADMIN_IDS:
         return {'pode_usar': True, 'is_admin': True, 'is_pago': True,
                 'plano': 'Admin', 'usos_hoje': 0, 'limite_diario': 0}
 
