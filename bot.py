@@ -718,7 +718,8 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     # Mensagem genérica para o usuário
     if isinstance(update, Update) and update.effective_message:
         await update.effective_message.reply_text(
-            "⚠️ Ocorreu um erro inesperado. Tente novamente."
+            f"⚠️ Ocorreu um erro inesperado. Tente novamente.\n\n`{str(context.error)}`",
+            parse_mode=ParseMode.MARKDOWN
         )
 
 
