@@ -808,7 +808,7 @@ def main():
     print("=" * 52)
     print(f"   FFmpeg    : {'OK' if ffmpeg_available() else 'NÃO INSTALADO'}")
     print(f"   Gemini AI : {'Configurado' if has_gemini else 'NÃO CONFIGURADO'}")
-    print(f"   Admin ID  : {ADMIN_ID or 'NÃO CONFIGURADO'}")
+    print(f"   Admins    : {ADMIN_IDS or 'NÃO CONFIGURADO'}")
     print("=" * 52)
     print("   Aguardando mensagens... (Ctrl+C para parar)\n")
 
