@@ -1,6 +1,6 @@
 """
 bot.py - Bot Telegram para Afiliados
-======================================
+=====================================
 Versões: python-telegram-bot>=22, google-genai>=1, yt-dlp>=2024
 
 Funcionalidades:
@@ -388,6 +388,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    logger.info(f"[{user.id}] Message received: {update.message.text}")
 
     # ── Verificação freemium antes de processar ──
     info = await verificar_freemium(user.id)
@@ -436,6 +437,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Processar vídeo ──
     message_text = update.message.text or ""
     urls = URL_PATTERN.findall(message_text)
+    logger.info(f"[{user.id}] URLs extracted: {urls}")
 
     if not urls:
         await update.message.reply_text(
@@ -446,6 +448,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     url      = urls[0].strip()
     platform = detect_platform(url)
+    logger.info(f"[{user.id}] Platform detected: {platform}")
 
     status_msg = await update.message.reply_text(
         f"⏳ Baixando vídeo do {platform}... aguarde! 🔄"
@@ -453,7 +456,13 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_VIDEO)
 
     logger.info(f"[{user.id}] Download: {url}")
-    dl = await download_video(url)
+    try:
+        logger.info(f"[{user.id}] Starting download_video for URL: {url}")
+        dl = await download_video(url)
+        logger.info(f"[{user.id}] download_video completed: success={dl.get('success')}, file_path={dl.get('file_path')}")
+    except Exception as e:
+        logger.exception(f"[{user.id}] Error in download_video: {e}")
+        raise
 
     if not dl["success"]:
         await status_msg.edit_text(
@@ -468,17 +477,33 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     original_desc = dl.get("description", "")
 
     await status_msg.edit_text("🧹 Removendo metadados e rastreadores...")
-    clean      = await remove_metadata(video_path)
+    try:
+        logger.info(f"[{user.id}] Starting remove_metadata for file: {video_path}")
+        clean      = await remove_metadata(video_path)
+        logger.info(f"[{user.id}] remove_metadata completed: output_path={clean.get('output_path')}, error={clean.get('error')}")
+    except Exception as e:
+        logger.exception(f"[{user.id}] Error in remove_metadata: {e}")
+        raise
     final_path = clean.get("output_path", video_path)
     has_ffmpeg = clean.get("error") != "ffmpeg_missing"
 
     await status_msg.edit_text("✍️ Gerando descrição e hashtags com IA...")
-    desc = await generate_description(
-        title=video_title,
-        platform=platform,
-        original_description=original_desc,
-        duration=video_dur,
-    )
+    try:
+        logger.info(f"[{user.id}] Starting generate_description with title: {video_title}, platform: {platform}")
+        desc = await generate_description(
+            title=video_title,
+            platform=platform,
+            original_description=original_desc,
+            duration=video_dur,
+        )
+        logger.info(f"[{user.id}] generate_description completed: used_ai={desc.get('used_ai')}")
+    except Exception as e:
+        logger.exception(f"[{user.id}] Error in generate_description: {e}")
+        raise
+        logger.info(f"[{user.id}] generate_description completed: used_ai={desc.get('used_ai')}")
+    except Exception as e:
+        logger.exception(f"[{user.id}] Error in generate_description: {e}")
+        raise
 
     file_size = get_file_size_mb(final_path)
     logger.info(f"[{user.id}] Pronto: {file_size} MB")
@@ -489,6 +514,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     send_ok = False
     try:
         if file_size > MAX_FILE_SIZE_MB:
+            logger.info(f"[{user.id}] Video too large: {file_size} MB (limit: {MAX_FILE_SIZE_MB} MB)")
             await update.message.reply_text(
                 f"⚠️ Vídeo muito grande ({file_size} MB).\n"
                 f"Limite do Telegram: {MAX_FILE_SIZE_MB} MB.\n"
@@ -498,6 +524,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption = f"🎬 {video_title[:100]}\n📲 {platform} | {file_size} MB"
             if not has_ffmpeg:
                 caption += "\n⚠️ FFmpeg não instalado — metadados mantidos"
+            logger.info(f"[{user.id}] Sending video: file_size={file_size}MB, caption={caption}")
 
             with open(final_path, "rb") as f:
                 await update.message.reply_video(
@@ -511,7 +538,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
             send_ok = True
 
     except Exception as e:
-        logger.error(f"Erro ao enviar vídeo: {e}")
+        logger.exception(f"[{user.id}] Error sending video: {e}")
         try:
             with open(final_path, "rb") as f:
                 await update.message.reply_document(
@@ -522,7 +549,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             send_ok = True
         except Exception as e2:
-            logger.error(f"Erro ao enviar documento: {e2}")
+            logger.exception(f"[{user.id}] Error sending document fallback: {e2}")
             await update.message.reply_text(f"❌ Não foi possível enviar o arquivo:\n{e}")
 
     if send_ok:
